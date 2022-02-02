@@ -19,6 +19,8 @@ package org.apache.calcite.rel.externalize;
 import org.apache.calcite.avatica.AvaticaUtils;
 import org.apache.calcite.avatica.util.TimeUnit;
 import org.apache.calcite.plan.RelOptCluster;
+import org.apache.calcite.plan.RelOptTable;
+import org.apache.calcite.plan.RelTraitSet;
 import org.apache.calcite.rel.RelCollation;
 import org.apache.calcite.rel.RelCollationImpl;
 import org.apache.calcite.rel.RelCollations;
@@ -89,6 +91,7 @@ import static java.util.Objects.requireNonNull;
 public class RelJson {
   private final Map<String, Constructor> constructorMap = new HashMap<>();
   private final @Nullable JsonBuilder jsonBuilder;
+  private final InputTranslator inputTranslator;
 
   public static final List<String> PACKAGES =
       ImmutableList.of(
@@ -99,7 +102,33 @@ public class RelJson {
           "org.apache.calcite.adapter.jdbc.JdbcRules$");
 
   public RelJson(@Nullable JsonBuilder jsonBuilder) {
+    this(jsonBuilder, RelJson::inputTranslatorImpl);
+  }
+
+  private static RexNode inputTranslatorImpl(
+      Map<String, Object> stringObjectMap,
+      RexBuilder rexBuilder,
+      List<RelNode> relNodes) {
+    final Integer input = (Integer) stringObjectMap.get("input");
+    if (input != null) {
+      int i = input;
+      for (RelNode inputNode : relNodes) {
+        final RelDataType rowType = inputNode.getRowType();
+        if (i < rowType.getFieldCount()) {
+          final RelDataTypeField field = rowType.getFieldList().get(i);
+          return rexBuilder.makeInputRef(field.getType(), input);
+        }
+        i -= rowType.getFieldCount();
+      }
+      throw new RuntimeException("input field " + input + " is out of range");
+    } else {
+      throw new RuntimeException("input not defined");
+    }
+  }
+
+  public RelJson(@Nullable JsonBuilder jsonBuilder, InputTranslator inputTranslator) {
     this.jsonBuilder = jsonBuilder;
+    this.inputTranslator = inputTranslator;
   }
 
   private JsonBuilder jsonBuilder() {
@@ -624,18 +653,8 @@ public class RelJson {
           final RelDataType type = toType(typeFactory, map.get("type"));
           return rexBuilder.makeLocalRef(type, input);
         }
+        return inputTranslator.translate(map, rexBuilder, relInput.getInputs());
 
-        List<RelNode> inputNodes = relInput.getInputs();
-        int i = input;
-        for (RelNode inputNode : inputNodes) {
-          final RelDataType rowType = inputNode.getRowType();
-          if (i < rowType.getFieldCount()) {
-            final RelDataTypeField field = rowType.getFieldList().get(i);
-            return rexBuilder.makeInputRef(field.getType(), input);
-          }
-          i -= rowType.getFieldCount();
-        }
-        throw new RuntimeException("input field " + input + " is out of range");
       }
       final String field = (String) map.get("field");
       if (field != null) {
@@ -775,5 +794,145 @@ public class RelJson {
     map.put("kind", operator.kind.toString());
     map.put("syntax", operator.getSyntax().toString());
     return map;
+  }
+
+  /**
+   * Translates a JSON expression into a RexNode,
+   * applying a special method to inputs instead of transforming them into inputRef.
+   * @param cluster The optimization environment
+   * @param translator is a InputTranslator lambda transforming the JSON representing input
+   *               references into a RexNode
+   * @param o the map derived from a RexNode transformed into a JSON
+   * @return the transformed RexNode
+   */
+  public static RexNode readExpression(
+      RelOptCluster cluster,
+      InputTranslator translator,
+      Map<String, Object> o) {
+
+    RelInput relInput = new RelInputForCluster(cluster);
+    return new RelJson(null, translator).toRex(relInput, o);
+  }
+
+  /**
+   * Special context from which a relational expression can be initialized,
+   * reading from a serialized form of the relational expression.
+   * Containing only a cluster and an empty list of inputs.
+   */
+  private static class RelInputForCluster implements RelInput {
+    private final RelOptCluster cluster;
+
+    RelInputForCluster(RelOptCluster cluster) {
+      this.cluster = cluster;
+    }
+    @Override public RelOptCluster getCluster() {
+      return cluster;
+    }
+
+    @Override public RelTraitSet getTraitSet() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public RelOptTable getTable(String table) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public RelNode getInput() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public List<RelNode> getInputs() {
+      return ImmutableList.of();
+    }
+
+    @Override public @Nullable RexNode getExpression(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public ImmutableBitSet getBitSet(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable List<ImmutableBitSet> getBitSetList(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public List<AggregateCall> getAggregateCalls(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable Object get(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable String getString(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public float getFloat(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public <E extends Enum<E>> @Nullable E getEnum(
+        String tag, Class<E> enumClass) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable List<RexNode> getExpressionList(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable List<String> getStringList(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable List<Integer> getIntegerList(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public @Nullable List<List<Integer>> getIntegerListList(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public RelDataType getRowType(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public RelDataType getRowType(String expressionsTag, String fieldsTag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public RelCollation getCollation() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public RelDistribution getDistribution() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public ImmutableList<ImmutableList<RexLiteral>> getTuples(String tag) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override public boolean getBoolean(String tag, boolean default_) {
+      throw new UnsupportedOperationException();
+    }
+  }
+
+  /**
+   *  Translates a JSON expression representing an input reference into a RexNode.
+   */
+  @FunctionalInterface
+  public interface InputTranslator {
+
+    /**
+     * Transforms an input reference map into RexNode.
+     * @param map map representing input references
+     * @param rexBuilder the current builder
+     * @param inputs the list of RelNode inputs
+     * @return the new input RexNode
+     */
+    RexNode translate(Map<String, Object> map,
+        RexBuilder rexBuilder, List<RelNode> inputs);
   }
 }
