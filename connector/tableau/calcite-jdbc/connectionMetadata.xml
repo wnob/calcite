@@ -18,6 +18,8 @@
 
 <!-- Connection metadata, part of the Tableau connector SDK; see manifest.xml. -->
 <connection-metadata>
-  <database enabled='false' />
-  <schema enabled='true' />
+  <database enabled='true'>
+    <field />
+  </database>
+  <schema enabled='false' />
 </connection-metadata>

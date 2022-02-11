@@ -17,7 +17,7 @@
   ~
   ~ Connection resolver, part of the Tableau connector SDK; see manifest.xml.
   -->
-<tdr class='calcite-jdbc'>
+<tdr class='google_looker_jdbc'>
 	<connection-resolver>
     <connection-builder>
       <script file='connectionBuilder.js'/>
@@ -27,8 +27,11 @@
         <attribute-list>
           <attr>server</attr>
           <attr>port</attr>
+          <attr>dbname</attr>
           <attr>authentication</attr>
           <attr>username</attr>
+          <attr>password</attr>
+          <attr>sslmode</attr>
         </attribute-list>
       </required-attributes>
     </connection-normalizer>

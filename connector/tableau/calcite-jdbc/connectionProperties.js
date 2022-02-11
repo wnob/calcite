@@ -21,8 +21,11 @@
     var props = {};
     props["user"] = attr[connectionHelper.attributeUsername];
     props["password"] = attr[connectionHelper.attributePassword];
-    props["serialization"] = "PROTOBUF";
-    props["database"] = ""; // attr[connectionHelper.attributeDatabase];
-    props["schema"] = attr[connectionHelper.attributeSchema];
+
+    if (attr[connectionHelper.attributeSSLMode] == "require") {
+        props["ssl"] = "true";
+        props["sslmode"] = "require";
+    }
+
     return props;
 })

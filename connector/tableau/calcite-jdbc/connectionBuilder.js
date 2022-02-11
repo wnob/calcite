@@ -18,7 +18,8 @@
  * source. See manifest.xml.
  */
 (function dsbuilder(attr) {
-    var urlBuilder = "jdbc:avatica:remote:url=http://" + attr[connectionHelper.attributeServer] + ":" + attr[connectionHelper.attributePort];
+    var urlBuilder = "jdbc:postgresql://" + attr[connectionHelper.attributeServer] + ":" + attr[connectionHelper.attributePort] + "/" + attr[connectionHelper.attributeDatabase] + "?";
+
 
     return [urlBuilder];
 })

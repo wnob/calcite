@@ -16,8 +16,8 @@
   ~ limitations under the License.
   -->
 <!-- See notes below for definitions that require 2020.3 or newer -->
-<dialect name='FullPostgreSQL90JDBC'
-         class='calcite-jdbc'
+<dialect name='GoogleLookerSQL'
+         class='google_looker_jdbc'
          version='18.1'>
   <function-map>
     <function group='numeric' name='ABS' return-type='real'>
