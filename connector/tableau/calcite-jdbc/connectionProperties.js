@@ -31,4 +31,3 @@
     props["schema"] = attr[connectionHelper.attributeSchema];
     return props;
 })
-

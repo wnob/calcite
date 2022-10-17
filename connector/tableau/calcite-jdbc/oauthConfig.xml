@@ -20,21 +20,21 @@
 <pluginOAuthConfig> 
     <!-- must be the same as "class" attribute for the connector-plugin element in manifest.xml. -->
 	<dbclass>calcite-jdbc</dbclass>
-    
+
     <!-- clientSecret, clientId, and redirectUri must exactly match the registered OAuth client on the Looker instance. -->
     <clientIdDesktop>tableau_client_id</clientIdDesktop>
     <clientSecretDesktop>tableau_client_secret</clientSecretDesktop>
     <redirectUrisDesktop>https://localhost:55556/Callback</redirectUrisDesktop>
-    
+
     <!-- /auth endpoint to authenticate as a Looker user. -->
-    <authUri>:9999/auth</authUri>
-    
+    <authUri>/auth</authUri>
+
     <!-- /api/token endpoint for token exchange. Tableau will use the access_token and refresh_token for subsequent requests. -->
-    <tokenUri>:19999/api/token</tokenUri>
-    
+    <tokenUri>/api/token</tokenUri>
+
     <!-- The only scope Looker needs or recognizes. -->
     <scopes>cors_api</scopes>
-    
+
     <capabilities>
         <!-- allows for custom Looker host names. -->
         <entry>
@@ -71,17 +71,17 @@
             <key>ACCESSTOKEN</key>
             <value>access_token</value>
         </entry>
-        
+
         <entry>
             <key>REFRESHTOKEN</key>
             <value>refresh_token</value>
         </entry>
-        
+
         <entry>
             <key>access-token-issue-time</key>
             <value>issued_at</value>
         </entry>
-        
+
         <entry>
             <key>access-token-expires-in</key>
             <value>expires_in</value>

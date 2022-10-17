@@ -60,4 +60,3 @@
   <dialect file="dialect.tdd"/>
   <oauth-config file='oauthConfig.xml'/>
 </connector-plugin>
-
