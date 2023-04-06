@@ -30,11 +30,12 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.type.SqlTypeUtil;
 import org.apache.calcite.sql.validate.implicit.AbstractTypeCoercion;
 import org.apache.calcite.sql.validate.implicit.TypeCoercion;
-import org.apache.calcite.test.catalog.MockCatalogReader;
+import org.apache.calcite.test.catalog.MockCatalogReaderSimple;
 import org.apache.calcite.util.Pair;
 
 import com.google.common.collect.ImmutableList;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -236,16 +237,13 @@ class TypeCoercionTest extends SqlValidatorTestCase {
     }
   }
 
-  // some data types has the same type family, i.e. TIMESTAMP and
-  // TIMESTAMP_WITH_LOCAL_TIME_ZONE all have TIMESTAMP family.
-  private static boolean contains(List<RelDataType> types, RelDataType type) {
-    for (RelDataType type1 : types) {
-      if (type1.equals(type)
-          || type1.getSqlTypeName().getFamily() == type.getSqlTypeName().getFamily()) {
-        return true;
-      }
-    }
-    return false;
+  @BeforeEach public void setup() {
+    fixture().mockCatalogReader.clearRootSchemaTypeMap();
+  }
+
+  public static SqlValidatorFixture sql(String sql) {
+    return validatorFixture()
+        .withSql(sql);
   }
 
   private boolean equals(Object o1, Object o2) {
@@ -797,6 +795,51 @@ class TypeCoercionTest extends SqlValidatorTestCase {
     shouldNotCast(checkedType15, SqlTypeFamily.INTEGER);
   }
 
+  @Test void testImplicitCastRespectsCatalogTypeMap() {
+    final Fixture f = fixture();
+
+    // Add some type mappings:
+    // A BigQuery "TIMESTAMP" is equivalent to "TIMESTAMP WITH LOCAL TIME ZONE" in ISO SQL.
+    f.mockCatalogReader.addNamedTypeToRootSchema(
+        "TIMESTAMP", f.typeFactory.createSqlType(SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE));
+    // The rest of the mappings take standard SQL types and map them all to "DOUBLE".
+    // This would probably never occur in real life, but is necessary to unit-test all code paths.
+    f.mockCatalogReader.addNamedTypeToRootSchema(
+        "VARCHAR", f.typeFactory.createSqlType(SqlTypeName.DOUBLE));
+    f.mockCatalogReader.addNamedTypeToRootSchema(
+        "VARBINARY", f.typeFactory.createSqlType(SqlTypeName.DOUBLE));
+    f.mockCatalogReader.addNamedTypeToRootSchema(
+        "DECIMAL", f.typeFactory.createSqlType(SqlTypeName.DOUBLE));
+    f.mockCatalogReader.addNamedTypeToRootSchema(
+        "DATE", f.typeFactory.createSqlType(SqlTypeName.DOUBLE));
+    f.mockCatalogReader.addNamedTypeToRootSchema(
+        "GEOMETRY", f.typeFactory.createSqlType(SqlTypeName.DOUBLE));
+
+    // No-op cast with mapping:
+    f.shouldCast(
+        SqlTypeName.TIMESTAMP, SqlTypeFamily.TIMESTAMP, SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+
+    // Null cast with mapping:
+    f.shouldCast(
+        SqlTypeName.NULL, SqlTypeFamily.TIMESTAMP, SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+
+    // Exact-to-decimal cast with mapping:
+    f.shouldCast(SqlTypeName.INTEGER, SqlTypeFamily.DECIMAL, SqlTypeName.DOUBLE);
+
+    // Inexact-to-decimal cast with mapping:
+    f.shouldCast(SqlTypeName.DOUBLE, SqlTypeFamily.DECIMAL, SqlTypeName.DOUBLE);
+
+    // Other explicit coercions:
+    f.shouldCast(
+        SqlTypeName.DATE, SqlTypeFamily.TIMESTAMP, SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+    f.shouldCast(
+        SqlTypeName.VARCHAR, SqlTypeFamily.TIMESTAMP, SqlTypeName.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+    f.shouldCast(SqlTypeName.VARCHAR, SqlTypeFamily.DECIMAL, SqlTypeName.DOUBLE);
+    f.shouldCast(SqlTypeName.VARCHAR, SqlTypeFamily.BINARY, SqlTypeName.DOUBLE);
+    f.shouldCast(SqlTypeName.INTEGER, SqlTypeFamily.CHARACTER, SqlTypeName.DOUBLE);
+    f.shouldCast(SqlTypeName.VARCHAR, SqlTypeFamily.GEO, SqlTypeName.DOUBLE);
+  }
+
   /** Test case for {@link TypeCoercion#builtinFunctionCoercion}. */
   @Test void testBuiltinFunctionCoercion() {
     // concat
@@ -852,9 +895,151 @@ class TypeCoercionTest extends SqlValidatorTestCase {
 
   //~ Inner Class ------------------------------------------------------------
 
-  /** A catalog reader with table t1 and t2 whose schema contains all the test data types. */
-  public class TCatalogReader extends MockCatalogReader {
-    private boolean isCaseSensitive;
+  /** Everything you need to run a test. */
+  static class Fixture {
+    final MockCatalogReaderSimple mockCatalogReader;
+    final TypeCoercion typeCoercion;
+    final RelDataTypeFactory typeFactory;
+
+    // type category.
+    final ImmutableList<RelDataType> numericTypes;
+    final ImmutableList<RelDataType> atomicTypes;
+    final ImmutableList<RelDataType> allTypes;
+    final ImmutableList<RelDataType> charTypes;
+    final ImmutableList<RelDataType> binaryTypes;
+    final ImmutableList<RelDataType> booleanTypes;
+    final ImmutableList<RelDataType> geometryTypes;
+
+    // single types
+    final RelDataType nullType;
+    final RelDataType booleanType;
+    final RelDataType tinyintType;
+    final RelDataType smallintType;
+    final RelDataType intType;
+    final RelDataType bigintType;
+    final RelDataType floatType;
+    final RelDataType doubleType;
+    final RelDataType decimalType;
+    final RelDataType dateType;
+    final RelDataType timeType;
+    final RelDataType timestampType;
+    final RelDataType binaryType;
+    final RelDataType varbinaryType;
+    final RelDataType charType;
+    final RelDataType varcharType;
+    final RelDataType varchar20Type;
+    final RelDataType geometryType;
+
+    /** Creates a Fixture. */
+    public static Fixture create(SqlTestFactory testFactory) {
+      final SqlValidator validator = testFactory.createValidator();
+      return new Fixture(validator.getTypeFactory(), validator.getTypeCoercion(),
+          (MockCatalogReaderSimple) validator.getCatalogReader());
+    }
+
+    protected Fixture(RelDataTypeFactory typeFactory,
+        TypeCoercion typeCoercion, MockCatalogReaderSimple mockCatalogReader) {
+      this.typeFactory = typeFactory;
+      this.typeCoercion = typeCoercion;
+      this.mockCatalogReader = mockCatalogReader;
+
+      // Initialize single types
+      nullType = this.typeFactory.createSqlType(SqlTypeName.NULL);
+      booleanType = this.typeFactory.createSqlType(SqlTypeName.BOOLEAN);
+      tinyintType = this.typeFactory.createSqlType(SqlTypeName.TINYINT);
+      smallintType = this.typeFactory.createSqlType(SqlTypeName.SMALLINT);
+      intType = this.typeFactory.createSqlType(SqlTypeName.INTEGER);
+      bigintType = this.typeFactory.createSqlType(SqlTypeName.BIGINT);
+      floatType = this.typeFactory.createSqlType(SqlTypeName.FLOAT);
+      doubleType = this.typeFactory.createSqlType(SqlTypeName.DOUBLE);
+      decimalType = this.typeFactory.createSqlType(SqlTypeName.DECIMAL);
+      dateType = this.typeFactory.createSqlType(SqlTypeName.DATE);
+      timeType = this.typeFactory.createSqlType(SqlTypeName.TIME);
+      timestampType = this.typeFactory.createSqlType(SqlTypeName.TIMESTAMP);
+      binaryType = this.typeFactory.createSqlType(SqlTypeName.BINARY);
+      varbinaryType = this.typeFactory.createSqlType(SqlTypeName.VARBINARY);
+      charType = this.typeFactory.createSqlType(SqlTypeName.CHAR);
+      varcharType = this.typeFactory.createSqlType(SqlTypeName.VARCHAR);
+      varchar20Type = this.typeFactory.createSqlType(SqlTypeName.VARCHAR, 20);
+      geometryType = this.typeFactory.createSqlType(SqlTypeName.GEOMETRY);
+
+      // Initialize category types
+
+      // INT
+      ImmutableList.Builder<RelDataType> builder = ImmutableList.builder();
+      for (SqlTypeName typeName : SqlTypeName.INT_TYPES) {
+        builder.add(this.typeFactory.createSqlType(typeName));
+      }
+      numericTypes = builder.build();
+      // ATOMIC
+      ImmutableList.Builder<RelDataType> builder3 = ImmutableList.builder();
+      for (SqlTypeName typeName : SqlTypeName.DATETIME_TYPES) {
+        builder3.add(this.typeFactory.createSqlType(typeName));
+      }
+      builder3.addAll(numericTypes);
+      for (SqlTypeName typeName : SqlTypeName.STRING_TYPES) {
+        builder3.add(this.typeFactory.createSqlType(typeName));
+      }
+      for (SqlTypeName typeName : SqlTypeName.BOOLEAN_TYPES) {
+        builder3.add(this.typeFactory.createSqlType(typeName));
+      }
+      for (SqlTypeName typeName : SqlTypeName.GEOMETRY_TYPES) {
+        builder3.add(this.typeFactory.createSqlType(typeName));
+      }
+      atomicTypes = builder3.build();
+      // COMPLEX
+      ImmutableList.Builder<RelDataType> builder4 = ImmutableList.builder();
+      builder4.add(this.typeFactory.createArrayType(intType, -1));
+      builder4.add(this.typeFactory.createArrayType(varcharType, -1));
+      builder4.add(this.typeFactory.createMapType(varcharType, varcharType));
+      builder4.add(this.typeFactory.createStructType(ImmutableList.of(Pair.of("a1", varcharType))));
+      List<? extends Map.Entry<String, RelDataType>> ll =
+          ImmutableList.of(Pair.of("a1", varbinaryType), Pair.of("a2", intType));
+      builder4.add(this.typeFactory.createStructType(ll));
+      ImmutableList<RelDataType> complexTypes = builder4.build();
+      // ALL
+      SqlIntervalQualifier intervalQualifier =
+          new SqlIntervalQualifier(TimeUnit.DAY, TimeUnit.MINUTE, SqlParserPos.ZERO);
+      allTypes =
+          combine(atomicTypes, complexTypes,
+              ImmutableList.of(nullType,
+                  this.typeFactory.createSqlIntervalType(intervalQualifier)));
+
+      // CHARACTERS
+      ImmutableList.Builder<RelDataType> builder6 = ImmutableList.builder();
+      for (SqlTypeName typeName : SqlTypeName.CHAR_TYPES) {
+        builder6.add(this.typeFactory.createSqlType(typeName));
+      }
+      charTypes = builder6.build();
+      // BINARY
+      ImmutableList.Builder<RelDataType> builder7 = ImmutableList.builder();
+      for (SqlTypeName typeName : SqlTypeName.BINARY_TYPES) {
+        builder7.add(this.typeFactory.createSqlType(typeName));
+      }
+      binaryTypes = builder7.build();
+      // BOOLEAN
+      ImmutableList.Builder<RelDataType> builder8 = ImmutableList.builder();
+      for (SqlTypeName typeName : SqlTypeName.BOOLEAN_TYPES) {
+        builder8.add(this.typeFactory.createSqlType(typeName));
+      }
+      booleanTypes = builder8.build();
+      // GEOMETRY
+      ImmutableList.Builder<RelDataType> builder9 = ImmutableList.builder();
+      for (SqlTypeName typeName : SqlTypeName.GEOMETRY_TYPES) {
+        builder9.add(this.typeFactory.createSqlType(typeName));
+      }
+      geometryTypes = builder9.build();
+    }
+
+    public Fixture withTypeFactory(RelDataTypeFactory typeFactory) {
+      return new Fixture(typeFactory, typeCoercion, mockCatalogReader);
+    }
+
+    //~ Tool methods -----------------------------------------------------------
+
+    RelDataType arrayType(RelDataType type) {
+      return typeFactory.createArrayType(type, -1);
+    }
 
     TCatalogReader(RelDataTypeFactory typeFactory, boolean isCaseSensitive) {
       super(typeFactory, false);
@@ -897,8 +1082,130 @@ class TypeCoercionTest extends SqlValidatorTestCase {
       return this;
     }
 
-    @Override public boolean isCaseSensitive() {
-      return isCaseSensitive;
+    RelDataType recordType(List<? extends Map.Entry<String, RelDataType>> pairs) {
+      return typeFactory.createStructType(pairs);
+    }
+
+    RelDataType decimalType(int precision, int scale) {
+      return typeFactory.createSqlType(SqlTypeName.DECIMAL, precision, scale);
+    }
+
+    /** Decision method for {@link AbstractTypeCoercion#implicitCast}. */
+    private void shouldCast(
+        RelDataType from,
+        SqlTypeFamily family,
+        RelDataType expected) {
+      if (family == null) {
+        // ROW type do not have a family.
+        return;
+      }
+      RelDataType castedType =
+          ((AbstractTypeCoercion) typeCoercion).implicitCast(from, family);
+      String reason = "Failed to cast from " + from.getSqlTypeName()
+          + " to " + family;
+      assertThat(reason, castedType, notNullValue());
+      assertThat(reason,
+          from.equals(castedType)
+              || SqlTypeUtil.equalSansNullability(typeFactory, castedType, expected)
+              || expected.getSqlTypeName().getFamily().contains(castedType),
+          is(true));
+    }
+
+    /** Convenience method to call {@link #shouldCast(RelDataType, SqlTypeFamily, RelDataType)}. */
+    private void shouldCast(SqlTypeName from, SqlTypeFamily family, SqlTypeName expected) {
+      shouldCast(typeFactory.createSqlType(from), family, typeFactory.createSqlType(expected));
+    }
+
+    private void shouldNotCast(
+        RelDataType from,
+        SqlTypeFamily family) {
+      if (family == null) {
+        // ROW type do not have a family.
+        return;
+      }
+      RelDataType castedType =
+          ((AbstractTypeCoercion) typeCoercion).implicitCast(from, family);
+      assertThat("Should not be able to cast from " + from.getSqlTypeName()
+          + " to " + family,
+          castedType, nullValue());
+    }
+
+    private void checkShouldCast(RelDataType checked, List<RelDataType> types) {
+      for (RelDataType type : allTypes) {
+        if (contains(types, type)) {
+          shouldCast(checked, type.getSqlTypeName().getFamily(), type);
+        } else {
+          shouldNotCast(checked, type.getSqlTypeName().getFamily());
+        }
+      }
+    }
+
+    // some data types has the same type family, i.e. TIMESTAMP and
+    // TIMESTAMP_WITH_LOCAL_TIME_ZONE all have TIMESTAMP family.
+    private static boolean contains(List<RelDataType> types, RelDataType type) {
+      for (RelDataType type1 : types) {
+        if (type1.equals(type)
+            || type1.getSqlTypeName().getFamily() == type.getSqlTypeName().getFamily()) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    private String toStringNullable(Object o1) {
+      if (o1 == null) {
+        return "NULL";
+      }
+      return o1.toString();
+    }
+
+    /** Decision method for finding a common type. */
+    private void checkCommonType(
+        RelDataType type1,
+        RelDataType type2,
+        RelDataType expected,
+        boolean isSymmetric) {
+      RelDataType result = typeCoercion.getTightestCommonType(type1, type2);
+      assertThat("Expected " + toStringNullable(expected)
+          + " as common type for " + type1.toString()
+          + " and " + type2.toString()
+          + ", but found " + toStringNullable(result),
+          result,
+          sameInstance(expected));
+      if (isSymmetric) {
+        RelDataType result1 = typeCoercion.getTightestCommonType(type2, type1);
+        assertThat("Expected " + toStringNullable(expected)
+            + " as common type for " + type2
+            + " and " + type1
+            + ", but found " + toStringNullable(result1),
+            result1, sameInstance(expected));
+      }
+    }
+
+    /** Decision method for finding a wider type. */
+    private void checkWiderType(
+        RelDataType type1,
+        RelDataType type2,
+        RelDataType expected,
+        boolean stringPromotion,
+        boolean symmetric) {
+      RelDataType result =
+          typeCoercion.getWiderTypeForTwo(type1, type2, stringPromotion);
+      assertThat("Expected "
+          + toStringNullable(expected)
+          + " as common type for " + type1.toString()
+          + " and " + type2.toString()
+          + ", but found " + toStringNullable(result),
+          result, sameInstance(expected));
+      if (symmetric) {
+        RelDataType result1 =
+            typeCoercion.getWiderTypeForTwo(type2, type1, stringPromotion);
+        assertThat("Expected " + toStringNullable(expected)
+            + " as common type for " + type2
+            + " and " + type1
+            + ", but found " + toStringNullable(result1),
+            result1, sameInstance(expected));
+      }
     }
   }
 

@@ -643,49 +643,87 @@ public abstract class AbstractTypeCoercion implements TypeCoercion {
         SqlTypeFamily.TIME, SqlTypeFamily.TIMESTAMP);
     // If the expected type is already a parent of the input type, no need to cast.
     if (expected.getTypeNames().contains(in.getSqlTypeName())) {
-      return in;
+      return possiblyMapped(in);
     }
     // Cast null type (usually from null literals) into target type.
     if (SqlTypeUtil.isNull(in)) {
-      return expected.getDefaultConcreteType(factory);
+      return possiblyMapped(expected.getDefaultConcreteType(factory));
     }
     if (SqlTypeUtil.isNumeric(in) && expected == SqlTypeFamily.DECIMAL) {
-      return factory.decimalOf(in);
+      return possiblyMapped(factory.decimalOf(in));
     }
     // FLOAT/DOUBLE -> DECIMAL
     if (SqlTypeUtil.isApproximateNumeric(in) && expected == SqlTypeFamily.EXACT_NUMERIC) {
-      return factory.decimalOf(in);
+      return possiblyMapped(factory.decimalOf(in));
     }
     // DATE to TIMESTAMP
     if (SqlTypeUtil.isDate(in) && expected == SqlTypeFamily.TIMESTAMP) {
-      return factory.createSqlType(SqlTypeName.TIMESTAMP);
+      return possiblyMapped(factory.createSqlType(SqlTypeName.TIMESTAMP));
     }
     // TIMESTAMP to DATE.
     if (SqlTypeUtil.isTimestamp(in) && expected == SqlTypeFamily.DATE) {
-      return factory.createSqlType(SqlTypeName.DATE);
+      return possiblyMapped(factory.createSqlType(SqlTypeName.DATE));
     }
     // If the function accepts any NUMERIC type and the input is a STRING,
     // returns the expected type family's default type.
     // REVIEW Danny 2018-05-22: same with MS-SQL and MYSQL.
     if (SqlTypeUtil.isCharacter(in) && numericFamilies.contains(expected)) {
-      return expected.getDefaultConcreteType(factory);
+      return possiblyMapped(expected.getDefaultConcreteType(factory));
     }
     // STRING + DATE -> DATE;
     // STRING + TIME -> TIME;
     // STRING + TIMESTAMP -> TIMESTAMP
     if (SqlTypeUtil.isCharacter(in) && dateTimeFamilies.contains(expected)) {
-      return expected.getDefaultConcreteType(factory);
+      return possiblyMapped(expected.getDefaultConcreteType(factory));
     }
     // STRING + BINARY -> VARBINARY
     if (SqlTypeUtil.isCharacter(in) && expected == SqlTypeFamily.BINARY) {
-      return expected.getDefaultConcreteType(factory);
+      return possiblyMapped(expected.getDefaultConcreteType(factory));
     }
     // If we get here, `in` will never be STRING type.
     if (SqlTypeUtil.isAtomic(in)
         && (expected == SqlTypeFamily.STRING
         || expected == SqlTypeFamily.CHARACTER)) {
-      return expected.getDefaultConcreteType(factory);
+      return possiblyMapped(expected.getDefaultConcreteType(factory));
+    }
+    // CHAR -> GEOMETRY
+    if (SqlTypeUtil.isCharacter(in) && expected == SqlTypeFamily.GEO) {
+      return possiblyMapped(expected.getDefaultConcreteType(factory));
     }
     return null;
+  }
+
+  private RelDataType possiblyMapped(RelDataType canonicalType) {
+    RelDataType mappedType =
+        validator.getCatalogReader().getNamedType(
+            new SqlIdentifier(canonicalType.getSqlTypeName().toString(), SqlParserPos.ZERO));
+    return mappedType != null ? mappedType : canonicalType;
+  }
+
+  /**
+   * Coerce STRING type to ARRAY type.
+   */
+  protected Boolean coerceStringToArray(
+      SqlCall call,
+      SqlNode operand,
+      int index,
+      RelDataType fromType,
+      RelDataType targetType) {
+    if (validator.config().conformance().allowCoercionStringToArray()
+        && SqlTypeUtil.isString(fromType)
+        && SqlTypeUtil.isArray(targetType)
+        && operand instanceof SqlCharStringLiteral) {
+      try {
+        SqlNode arrayValue =
+            SqlParserUtil.parseArrayLiteral(
+                ((SqlCharStringLiteral) operand).getValueAs(String.class));
+        call.setOperand(index, arrayValue);
+        updateInferredType(arrayValue, targetType);
+      } catch (SqlParseException e) {
+        return false;
+      }
+      return true;
+    }
+    return false;
   }
 }

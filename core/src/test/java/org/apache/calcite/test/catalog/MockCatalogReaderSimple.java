@@ -34,8 +34,12 @@ import org.apache.calcite.util.Util;
 
 import com.google.common.collect.ImmutableList;
 
+import org.checkerframework.checker.nullness.qual.NonNull;
+import org.checkerframework.checker.nullness.qual.Nullable;
+
 import java.math.BigDecimal;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -43,6 +47,7 @@ import java.util.List;
  */
 public class MockCatalogReaderSimple extends MockCatalogReader {
   private final ObjectSqlType addressType;
+  private final HashMap<String, RelDataType> rootSchemaTypeMap;
 
   /**
    * Creates a MockCatalogReader.
@@ -57,37 +62,33 @@ public class MockCatalogReaderSimple extends MockCatalogReader {
     super(typeFactory, caseSensitive);
 
     addressType = new Fixture(typeFactory).addressType;
+    rootSchemaTypeMap = new HashMap();
   }
 
-  @Override public RelDataType getNamedType(SqlIdentifier typeName) {
+  /** Creates and initializes a MockCatalogReaderSimple. */
+  public static @NonNull MockCatalogReaderSimple create(
+      RelDataTypeFactory typeFactory, boolean caseSensitive) {
+    return new MockCatalogReaderSimple(typeFactory, caseSensitive).init();
+  }
+
+  @Override public @Nullable RelDataType getNamedType(SqlIdentifier typeName) {
     if (typeName.equalsDeep(addressType.getSqlIdentifier(), Litmus.IGNORE)) {
       return addressType;
     } else {
-      return super.getNamedType(typeName);
+      RelDataType r = rootSchemaTypeMap.get(typeName.getSimple());
+      return r != null ? r : super.getNamedType(typeName);
     }
   }
 
-  @Override public MockCatalogReader init() {
-    final Fixture fixture = new Fixture(typeFactory);
+  public void addNamedTypeToRootSchema(String name, RelDataType dataType) {
+    rootSchemaTypeMap.put(name, dataType);
+  }
 
-    // Register "SALES" schema.
-    MockSchema salesSchema = new MockSchema("SALES");
-    registerSchema(salesSchema);
+  public void clearRootSchemaTypeMap() {
+    rootSchemaTypeMap.clear();
+  }
 
-    // Register "EMP" table with customer InitializerExpressionFactory
-    // to check whether newDefaultValue method called or not.
-    final InitializerExpressionFactory countingInitializerExpressionFactory =
-        new CountingFactory(ImmutableList.of("DEPTNO"));
-
-    registerType(
-        ImmutableList.of(salesSchema.getCatalogName(), salesSchema.getName(),
-            "customBigInt"),
-        typeFactory -> typeFactory.createSqlType(SqlTypeName.BIGINT));
-
-    // Register "EMP" table.
-    final MockTable empTable =
-        MockTable.create(this, salesSchema, "EMP", false, 14, null,
-            countingInitializerExpressionFactory, false);
+  private void registerTableEmp(MockTable empTable, Fixture fixture) {
     empTable.addColumn("EMPNO", fixture.intType, true);
     empTable.addColumn("ENAME", fixture.varchar20Type);
     empTable.addColumn("JOB", fixture.varchar10Type);
