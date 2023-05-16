@@ -33,6 +33,7 @@ import org.apache.calcite.rel.hint.HintStrategyTable;
 import org.apache.calcite.rel.hint.RelHint;
 import org.apache.calcite.rel.logical.LogicalAggregate;
 import org.apache.calcite.rel.logical.LogicalFilter;
+import org.apache.calcite.rel.rel2sql.RelToSqlConverterTest.Sql;
 import org.apache.calcite.rel.rules.AggregateJoinTransposeRule;
 import org.apache.calcite.rel.rules.AggregateProjectMergeRule;
 import org.apache.calcite.rel.rules.CoreRules;
@@ -54,6 +55,7 @@ import org.apache.calcite.sql.SqlSelect;
 import org.apache.calcite.sql.SqlWriter;
 import org.apache.calcite.sql.SqlWriterConfig;
 import org.apache.calcite.sql.dialect.AnsiSqlDialect;
+import org.apache.calcite.sql.dialect.BigQuerySqlDialect;
 import org.apache.calcite.sql.dialect.CalciteSqlDialect;
 import org.apache.calcite.sql.dialect.HiveSqlDialect;
 import org.apache.calcite.sql.dialect.JethroDataSqlDialect;
@@ -1871,7 +1873,13 @@ class RelToSqlConverterTest {
         .dialect(nonOrdinalDialect())
         .ok("SELECT JOB, ENAME\n"
             + "FROM scott.EMP\n"
-            + "ORDER BY 1, '23', 12, ENAME, 34 DESC NULLS LAST");
+            + "ORDER BY 1, '23', 12, ENAME, 34 DESC NULLS LAST")
+        // In the case the dialect cannot ORDER BY literal values (such as BigQuery)
+        // remove them entirely.
+        .dialect(BigQuerySqlDialect.DEFAULT)
+        .ok("SELECT JOB, ENAME\n"
+            + "FROM scott.EMP\n"
+            + "ORDER BY ENAME IS NULL, ENAME");
   }
 
   @Test void testNoNeedRewriteOrderByConstantsForOver() {
@@ -1880,6 +1888,19 @@ class RelToSqlConverterTest {
     // Default dialect keep numeric constant keys in the over of order-by.
     sql(query).ok("SELECT ROW_NUMBER() OVER (ORDER BY 1)\n"
         + "FROM \"foodmart\".\"employee\"");
+  }
+
+  /** Test case for
+   * <a href="https://issues.apache.org/jira/browse/CALCITE-5724">[CALCITE-5724]
+   * Test the ORDER BY is properly removed when all literal nodes are filtered out
+   * in a dialect that doesn't support ORDER BY literals</a>.
+   */
+  @Test void testRemoveEmptyOrderByClause() {
+    String query = "select 5, \"product_id\" from \"product\"\n"
+        + "order by 1";
+    final String expected = "SELECT 5, product_id\n"
+        + "FROM foodmart.product";
+    sql(query).withBigQuery().ok(expected);
   }
 
   /** Test case for

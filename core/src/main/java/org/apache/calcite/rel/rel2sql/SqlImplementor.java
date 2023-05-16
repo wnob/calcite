@@ -1124,6 +1124,11 @@ public abstract class SqlImplementor {
     }
 
     void addOrderItem(List<SqlNode> orderByList, RelFieldCollation field) {
+      // If the field being ordered on is a Literal value, we can safely skip it.
+      if (!dialect.getConformance().isSortByLiteralAllowed()
+          && field(field.getFieldIndex()) instanceof SqlLiteral) {
+        return;
+      }
       if (field.nullDirection != RelFieldCollation.NullDirection.UNSPECIFIED) {
         final boolean first =
             field.nullDirection == RelFieldCollation.NullDirection.FIRST;
@@ -1137,7 +1142,8 @@ public abstract class SqlImplementor {
                   RelFieldCollation.NullDirection.UNSPECIFIED);
         }
       }
-      orderByList.add(toSql(field));
+      SqlNode orderByNode = toSql(field);
+      orderByList.add(orderByNode);
     }
 
     /** Converts a RexFieldCollation to an ORDER BY item. */

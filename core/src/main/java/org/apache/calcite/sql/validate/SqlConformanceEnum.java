@@ -397,6 +397,15 @@ public enum SqlConformanceEnum implements SqlConformance {
     }
   }
 
+  @Override public boolean isSortByLiteralAllowed() {
+    switch (this) {
+    case BIG_QUERY:
+      return false;
+    default:
+      return true;
+    }
+  }
+
   @Override public boolean allowAliasUnnestItems() {
     switch (this) {
     case PRESTO:
