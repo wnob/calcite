@@ -418,6 +418,53 @@ class RelToSqlConverterTest {
     relFn(relFn).ok(expected);
   }
 
+  @Test void testUsesSubqueryWhenSortingByIdThenOrdinalWithDirections() {
+    final Function<RelBuilder, RelNode> relFn = b -> b
+        .scan("EMP")
+        .aggregate(
+            b.groupKey("JOB"),
+            b.aggregateCall(SqlStdOperatorTable.COUNT, b.field("ENAME")))
+        .sort(
+            RelCollations.of(
+                ImmutableList.of(
+                    new RelFieldCollation(0),
+                    new RelFieldCollation(1, Direction.DESCENDING, NullDirection.LAST))))
+        .project(b.field(0))
+        .build();
+    final String expected = "SELECT \"JOB\"\n"
+        + "FROM (SELECT \"JOB\", COUNT(\"ENAME\") AS \"$f1\"\n"
+        + "FROM \"scott\".\"EMP\"\n"
+        + "GROUP BY \"JOB\"\n"
+        + "ORDER BY \"JOB\", 2 DESC NULLS LAST) AS \"t0\"";
+
+    relFn(relFn).ok(expected);
+  }
+
+  @Test void testDoesNotUseSubqueryWhenSortingByIdThenFunctionWithIntegerConstant() {
+    final Function<RelBuilder, RelNode> relFn = b -> b
+        .scan("EMP")
+        .aggregate(
+            b.groupKey("EMPNO"),
+            b.aggregateCall(SqlStdOperatorTable.COUNT, b.field("ENAME")))
+        .sort(b.field(0), b.call(SqlStdOperatorTable.PLUS, b.literal(1), b.field(0)))
+        .project(b.field(0))
+        .build();
+    final String expected = "SELECT \"EMPNO\"\n"
+        + "FROM \"scott\".\"EMP\"\n"
+        + "GROUP BY \"EMPNO\"\n"
+        + "ORDER BY \"EMPNO\", 1 + \"EMPNO\"";
+
+    relFn(relFn)
+        .dialect(new PostgresqlSqlDialect(PostgresqlSqlDialect.DEFAULT_CONTEXT) {
+          @Override
+          public SqlConformance getConformance() {
+            // STRICT 2003 does not do sort-by-ordinal.
+            return SqlConformanceEnum.STRICT_2003;
+          }
+        })
+        .ok(expected);
+  }
+
   @Test void testSelectQueryWithWhereClauseOfBasicOperators() {
     String query = "select * from \"product\" "
         + "where (\"product_id\" = 10 OR \"product_id\" <= 5) "

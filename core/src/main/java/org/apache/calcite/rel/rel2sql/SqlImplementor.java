@@ -150,6 +150,9 @@ public abstract class SqlImplementor {
   static final SqlNumericLiteral ONE =
       SqlLiteral.createExactNumeric("1", POS);
 
+  private static final ImmutableSet<SqlKind> ORDER_ONLY_OPERATORS =
+      ImmutableSet.of(SqlKind.DESCENDING, SqlKind.NULLS_FIRST, SqlKind.NULLS_LAST);
+
   public final SqlDialect dialect;
   protected final Set<String> aliasSet = new LinkedHashSet<>();
 
@@ -1628,6 +1631,24 @@ public abstract class SqlImplementor {
     }
   }
 
+  /** Return whether the given {@link SqlNode} could be an ordinal sort expression.
+   *
+   * <p>The only valid ordinal sort expressions are X, X DESC, X NULLS FIRST/LAST,
+   * or X DESC NULLS FIRST/LAST where X is an integer.
+   */
+  private static boolean isNodeSortByOrdinal(SqlNode sqlNode) {
+    if (sqlNode instanceof SqlNumericLiteral) {
+      return ((SqlNumericLiteral) sqlNode).isInteger();
+    }
+    if (sqlNode instanceof SqlBasicCall) {
+      final SqlBasicCall call = (SqlBasicCall) sqlNode;
+      if (ORDER_ONLY_OPERATORS.contains(call.getOperator().getKind())) {
+        return call.getOperandList().stream().anyMatch(SqlImplementor::isNodeSortByOrdinal);
+      }
+    }
+    return false;
+  }
+
   /** Result of implementing a node. */
   public class Result {
     final SqlNode node;
@@ -1894,21 +1915,8 @@ public abstract class SqlImplementor {
     private boolean hasSortByOrdinal(@UnknownInitialization Result this) {
       if (node instanceof SqlSelect) {
         final SqlNodeList orderList = ((SqlSelect) node).getOrderList();
-        if (orderList == null) {
-          return false;
-        }
-        for (SqlNode sqlNode : orderList) {
-          if (sqlNode instanceof SqlNumericLiteral) {
-            return true;
-          }
-          if (sqlNode instanceof SqlBasicCall) {
-            for (SqlNode operand : ((SqlBasicCall) sqlNode).getOperandList()) {
-              if (operand instanceof SqlNumericLiteral) {
-                return true;
-              }
-            }
-          }
-        }
+        return orderList != null
+            && orderList.stream().anyMatch(SqlImplementor::isNodeSortByOrdinal);
       }
       return false;
     }
