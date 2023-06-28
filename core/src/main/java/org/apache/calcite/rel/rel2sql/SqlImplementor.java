@@ -125,6 +125,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.IntFunction;
+import java.util.function.IntUnaryOperator;
 import java.util.function.Predicate;
 
 import static org.apache.calcite.linq4j.Nullness.castNonNull;
@@ -149,6 +150,11 @@ public abstract class SqlImplementor {
   /** SQL numeric literal {@code 1}. */
   static final SqlNumericLiteral ONE =
       SqlLiteral.createExactNumeric("1", POS);
+
+  /** Operators that can apply to ordinal expressions in a {@code GROUP BY} or {@code ORDER BY}
+   * clause. */
+  private static final ImmutableSet<SqlKind> ORDINAL_OPERATORS =
+      ImmutableSet.of(SqlKind.DESCENDING, SqlKind.NULLS_FIRST, SqlKind.NULLS_LAST);
 
   public final SqlDialect dialect;
   protected final Set<String> aliasSet = new LinkedHashSet<>();
@@ -600,31 +606,40 @@ public abstract class SqlImplementor {
 
     public abstract SqlNode field(int ordinal);
 
-    /** Creates a reference to a field to be used in an ORDER BY clause.
+    /** Creates a reference to a field to be used in a {@code GROUP BY} clause.
      *
-     * <p>By default, it returns the same result as {@link #field}.
+     * <p>It uses ordinals if the dialect allows. Otherwise, it falls back on {@link #field}.
      *
-     * <p>If the field has an alias, uses the alias.
-     * If the field is an unqualified column reference which is the same an
-     * alias, switches to a qualified column reference.
+     * <p>Using aliases happens in other contexts, such as when the input is a table scan or a
+     * {@code SELECT *} sub-query. See {@link AliasContext}.
+     */
+    public SqlNode groupField(int ordinal, IntUnaryOperator ordinalMap) {
+      // Prefer to group by ordinal if the dialect allows it.
+      if (dialect.getConformance().isGroupByOrdinal()) {
+        return SqlLiteral.createExactNumeric(
+            Integer.toString(ordinalMap.applyAsInt(ordinal) + 1),
+            SqlParserPos.ZERO);
+      }
+      // Fall back on sorting by expression.
+      return field(ordinal);
+    }
+
+    /** Creates a reference to a field to be used in an {@code ORDER BY} clause.
+     *
+     * <p>It uses ordinals if the dialect allows. Otherwise, it falls back on {@link #field}.
+     *
+     * <p>Using aliases happens in other contexts, such as when the input is a table scan or a
+     * {@code SELECT *} sub-query. See {@link AliasContext}.
      */
     public SqlNode orderField(int ordinal) {
-      final SqlNode node = field(ordinal);
-      if (node instanceof SqlNumericLiteral
-          && dialect.getConformance().isSortByOrdinal()) {
-        // An integer literal will be wrongly interpreted as a field ordinal.
-        // Convert it to a character literal, which will have the same effect.
-        final String strValue = ((SqlNumericLiteral) node).toValue();
-        return SqlLiteral.createCharString(strValue, node.getParserPosition());
-      }
-      if (node instanceof SqlCall
-          && dialect.getConformance().isSortByOrdinal()) {
-        // If the field is expression and sort by ordinal is set in dialect,
-        // convert it to ordinal.
+      // Prefer to sort by ordinal if the dialect allows it.
+      if (dialect.getConformance().isSortByOrdinal()) {
         return SqlLiteral.createExactNumeric(
-            Integer.toString(ordinal + 1), SqlParserPos.ZERO);
+            Integer.toString(ordinal + 1),
+            SqlParserPos.ZERO);
       }
-      return node;
+      // Fall back on sorting by expression.
+      return field(ordinal);
     }
 
     /** Converts an expression from {@link RexNode} to {@link SqlNode}
@@ -1562,6 +1577,14 @@ public abstract class SqlImplementor {
       throw new AssertionError(
           "field ordinal " + ordinal + " out of range " + aliases);
     }
+
+    @Override public SqlNode groupField(int ordinal, IntUnaryOperator ordinalMap) {
+      return field(ordinal);
+    }
+
+    @Override public SqlNode orderField(int ordinal) {
+      return field(ordinal);
+    }
   }
 
   /** Context for translating ON clause of a JOIN from {@link RexNode} to
@@ -1732,8 +1755,7 @@ public abstract class SqlImplementor {
 
           @Override public SqlNode field(int ordinal) {
             final SqlNode selectItem = selectList.get(ordinal);
-            switch (selectItem.getKind()) {
-            case AS:
+            if (selectItem.getKind() == SqlKind.AS) {
               final SqlCall asCall = (SqlCall) selectItem;
               SqlNode alias = asCall.operand(1);
               if (aliasRef && !SqlUtil.isGeneratedAlias(((SqlIdentifier) alias).getSimple())) {
@@ -1745,13 +1767,20 @@ public abstract class SqlImplementor {
                 return alias;
               }
               return asCall.operand(0);
-            default:
-              break;
             }
             return selectItem;
           }
 
+          @Override public SqlNode groupField(int ordinal, IntUnaryOperator ordinalMap) {
+            return useOrdinalsInsteadOfConfusingAliases(
+                super.groupField(ordinal, ordinalMap), ordinal);
+          }
+
           @Override public SqlNode orderField(int ordinal) {
+            return useOrdinalsInsteadOfConfusingAliases(super.orderField(ordinal), ordinal);
+          }
+
+          private SqlNode useOrdinalsInsteadOfConfusingAliases(SqlNode node, int ordinal) {
             // If the field expression is an unqualified column identifier
             // and matches a different alias, use an ordinal.
             // For example, given
@@ -1760,7 +1789,6 @@ public abstract class SqlImplementor {
             //    SELECT deptno AS empno, empno AS x FROM emp ORDER BY 2
             // "ORDER BY empno" would give incorrect result;
             // "ORDER BY x" is acceptable but is not preferred.
-            final SqlNode node = super.orderField(ordinal);
             if (node instanceof SqlIdentifier
                 && ((SqlIdentifier) node).isSimple()) {
               final String name = ((SqlIdentifier) node).getSimple();
@@ -1768,7 +1796,11 @@ public abstract class SqlImplementor {
                 if (selectItem.i != ordinal) {
                   final @Nullable String alias =
                       SqlValidatorUtil.alias(selectItem.e);
-                  if (name.equalsIgnoreCase(alias) && dialect.getConformance().isSortByAlias()) {
+                  if (name.equalsIgnoreCase(alias)
+                      && dialect.getConformance().isSortByAlias()
+                      && dialect.getConformance().isSortByOrdinal()) {
+                    // Only translate if the dialect supports both aliases (meaning there would
+                    // otherwise be confusion) and ordinals (meaning there is a viable alternative).
                     return SqlLiteral.createExactNumeric(
                         Integer.toString(ordinal + 1), SqlParserPos.ZERO);
                   }
@@ -1833,12 +1865,18 @@ public abstract class SqlImplementor {
         return true;
       }
 
-      if (rel instanceof Project
-          && clauses.contains(Clause.ORDER_BY)
-          && dialect.getConformance().isSortByOrdinal()
-          && hasSortByOrdinal()) {
-        // Cannot merge a Project that contains sort by ordinal under it.
-        return true;
+      if (rel instanceof Project && node instanceof SqlSelect) {
+        // Cannot merge a Project when grouping or sorting by ordinal.
+        if (clauses.contains(Clause.GROUP_BY)
+            && dialect.getConformance().isGroupByOrdinal()
+            && hasGroupOrSortByOrdinal(((SqlSelect) node).getGroup())) {
+          return true;
+        }
+        if (clauses.contains(Clause.ORDER_BY)
+            && dialect.getConformance().isSortByOrdinal()
+            && hasGroupOrSortByOrdinal(((SqlSelect) node).getOrderList())) {
+          return true;
+        }
       }
 
       if (rel instanceof Project) {
@@ -1891,22 +1929,18 @@ public abstract class SqlImplementor {
      * Return whether the current {@link SqlNode} in {@link Result} contains sort by column
      * in ordinal format.
      */
-    private boolean hasSortByOrdinal(@UnknownInitialization Result this) {
-      if (node instanceof SqlSelect) {
-        final SqlNodeList orderList = ((SqlSelect) node).getOrderList();
-        if (orderList == null) {
-          return false;
+    private boolean hasGroupOrSortByOrdinal(SqlNodeList nodeList) {
+      if (nodeList == null) {
+        return false;
+      }
+      for (SqlNode sqlNode : nodeList) {
+        if (sqlNode instanceof SqlNumericLiteral) {
+          return true;
         }
-        for (SqlNode sqlNode : orderList) {
-          if (sqlNode instanceof SqlNumericLiteral) {
+        if (sqlNode instanceof SqlBasicCall && ORDINAL_OPERATORS.contains(sqlNode.getKind())) {
+          if (hasGroupOrSortByOrdinal(
+              new SqlNodeList(((SqlBasicCall) sqlNode).getOperandList(), SqlParserPos.ZERO))) {
             return true;
-          }
-          if (sqlNode instanceof SqlBasicCall) {
-            for (SqlNode operand : ((SqlBasicCall) sqlNode).getOperandList()) {
-              if (operand instanceof SqlNumericLiteral) {
-                return true;
-              }
-            }
           }
         }
       }

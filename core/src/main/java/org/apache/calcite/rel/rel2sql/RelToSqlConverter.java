@@ -102,13 +102,16 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.apache.calcite.rex.RexLiteral.stringValue;
@@ -498,6 +501,7 @@ public class RelToSqlConverter extends SqlImplementor
     final int inputFieldCount = input.getRowType().getFieldCount();
     final List<SqlNode> rexOvers = new ArrayList<>();
     for (Window.Group group: e.groups) {
+      // TODO: This may insert ordinals in the order-by clause of a window function. Don't do that.
       rexOvers.addAll(builder.context.toSql(group, e.constants, inputFieldCount));
     }
     final List<SqlNode> selectList = new ArrayList<>();
@@ -609,15 +613,40 @@ public class RelToSqlConverter extends SqlImplementor
    * expressions. */
   private List<SqlNode> generateGroupList(Builder builder,
       List<SqlNode> selectList, Aggregate aggregate, List<Integer> groupList) {
+    // Compute the index permutation for sorting groupList:
+    // a list of the indices of groupList sorted according to the values of groupList.
+    // This is effectively a mapping from *indices* within the SELECT list we're about to populate,
+    // to the original *indices* within groupList of the *values* that reference those SELECT
+    // indices.
+    final List<Integer> groupListSortPermutation =
+        Ordering.from(Comparator.comparingInt(groupList::get))
+            .immutableSortedCopy(
+                IntStream.range(0, groupList.size())
+                    .boxed()
+                    .collect(Collectors.toList()));
+    // Use the sorting index permutation to sort the list with a linear pass.
     final List<Integer> sortedGroupList =
-        Ordering.natural().sortedCopy(groupList);
+        groupListSortPermutation.stream().map(groupList::get).collect(Collectors.toList());
+
     assert aggregate.getGroupSet().asList().equals(sortedGroupList)
         : "groupList " + groupList + " must be equal to groupSet "
         + aggregate.getGroupSet() + ", just possibly a different order";
 
+    // Finally, invert the mapping created by the sorting index permutation, creating a mapping from
+    // the original *values* within groupList to *indices* within the to-be-populated SELECT list.
+    final Map<Integer, Integer> groupKeyToSelectIndex =
+        new HashMap<>(groupListSortPermutation.size());
+    for (int i = 0; i < groupListSortPermutation.size(); i++) {
+      groupKeyToSelectIndex.put(
+          groupList.get(groupListSortPermutation.get(i)), i);
+    }
+
     final List<SqlNode> groupKeys = new ArrayList<>();
     for (int key : groupList) {
-      final SqlNode field = builder.context.field(key);
+      // builder.context is the context of the subquery, not the parent query for which we're
+      // currently populating the SELECT list. Our inverted sort permutation maps ordinals
+      // from the child context to the parent context.
+      final SqlNode field = builder.context.groupField(key, groupKeyToSelectIndex::get);
       groupKeys.add(field);
     }
     for (int key : sortedGroupList) {
@@ -628,6 +657,8 @@ public class RelToSqlConverter extends SqlImplementor
     case SIMPLE:
       return ImmutableList.copyOf(groupKeys);
     case CUBE:
+      // TODO: CUBE does not support grouping by ordinal,
+      //       but with the current implementation groupKeys likely contains ordinals.
       if (aggregate.getGroupSet().cardinality() > 1) {
         return ImmutableList.of(
             SqlStdOperatorTable.CUBE.createCall(SqlParserPos.ZERO, groupKeys));
@@ -635,6 +666,8 @@ public class RelToSqlConverter extends SqlImplementor
       // a singleton CUBE and ROLLUP are the same but we prefer ROLLUP;
       // fall through
     case ROLLUP:
+      // TODO: ROLLUP does not support grouping by ordinal,
+      //       but with the current implementation groupKeys likely contains ordinals.
       final List<Integer> rollupBits = Aggregate.Group.getRollup(aggregate.groupSets);
       final List<SqlNode> rollupKeys = rollupBits
           .stream()
@@ -644,6 +677,8 @@ public class RelToSqlConverter extends SqlImplementor
           SqlStdOperatorTable.ROLLUP.createCall(SqlParserPos.ZERO, rollupKeys));
     default:
     case OTHER:
+      // TODO: GROUPING SETS does not support grouping by ordinal,
+      //       but with the current implementation groupKeys likely contains ordinals.
       // Make sure that the group sets contains all bits.
       final List<ImmutableBitSet> groupSets;
       if (aggregate.getGroupSet()
