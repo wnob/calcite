@@ -1875,6 +1875,25 @@ class RelOptRulesTest extends RelOptTestBase {
     sql(sql).withProgram(program).check();
   }
 
+  /** * */
+  @Test void testWithinDistinctAnotherOne() {
+    relFn(
+        b -> b
+            .scan("EMP")
+            .project(b.field(0), b.field(1), b.field(2))
+            .aggregate(
+                b.groupKey(b.field(0)),
+                b.aggregateCall(SqlStdOperatorTable.SUM0, b.field(1))
+                    .unique(b.field(2)))
+            .build())
+        .withProgram(
+            new HepProgramBuilder()
+                .addRuleInstance(CoreRules.AGGREGATE_REDUCE_FUNCTIONS)
+                .addRuleInstance(CoreRules.AGGREGATE_EXPAND_WITHIN_DISTINCT)
+                .build())
+        .check();
+  }
+
   @Test void testPushProjectPastFilter() {
     final String sql = "select empno + deptno from emp where sal = 10 * comm\n"
         + "and upper(ename) = 'FOO'";
