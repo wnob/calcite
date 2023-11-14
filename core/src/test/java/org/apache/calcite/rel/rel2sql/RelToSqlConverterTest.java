@@ -2136,6 +2136,15 @@ class RelToSqlConverterTest {
     sql(query).withBigQuery().ok(expected);
   }
 
+  @Test void testBigQuerySafeCast() {
+    final String query = "select safe_cast(\"product_name\" as date) "
+        + "from \"foodmart\".\"product\"";
+    final String expected = "SELECT SAFE_CAST(\"product_name\" AS DATE)\n"
+        + "FROM \"foodmart\".\"product\"";
+
+    sql(query).withLibrary(SqlLibrary.BIG_QUERY).ok(expected);
+  }
+
   @Test void testBigQueryParseDatetimeFunctions() {
     String parseTime = "select parse_time('%I:%M:%S', '07:30:00')\n"
         + "from \"foodmart\".\"product\"\n";
