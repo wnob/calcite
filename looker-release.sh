@@ -21,11 +21,19 @@
 # 1. Start working off the current fork branch: https://github.com/looker-open-source/calcite/tree/looker
 # 2. Do whatever needs to be done (rebase on trunk, cherry-pick, remove fixups, etc.),
 #    but don't bother updating the `calcite.version` line in `gradle.properties`.
-# 3. Once the code looks good and your Git working directory is clean, run this script, which will:
+#    There should only be "business logic" commits,
+#    and every commit that is not yet upstreamed (called "fix-up" commits)
+#    should reference a Calcite Jira ticket in its message,
+#    and have a PR open to upstream it to Apache's main repo, if possible.
+# 3. Once the code looks good and your Git working directory is clean, run this script
+#    which will do all of this (mostly) automatically:
 #    a) Pull all Looker Calcite version tags from GitHub and show you what the latest one is.
 #       This is just for convenience.
 #    b) Ask you what the next version number should be.
-#       Generally we just increment the patch number.
+#       The major number should always be 1 less than whatever's in Apache's `main` branch.
+#       Increment the minor number when you add functionality in a backward compatible manner.
+#       Increment the patch number when you make backward compatible bug fixes.
+#       Generally, we just increment the patch number.
 #    c) Reset your local `looker` branch to the current HEAD.
 #    d) Update the version line in `gradle.properties` and create a version bump commit.
 #    e) Create a release tag pointing to the new version bump commit.
@@ -43,28 +51,40 @@ git fetch git@github.com:looker-open-source/calcite.git --tags && (
   export NEXT_TAG="calcite-${NEXT_VERSION}"
 
   echo -e "\nSetting version number in gradle.properties to '$NEXT_VERSION'." >&2
-  # https://stackoverflow.com/questions/5694228/sed-in-place-flag-that-works-both-on-mac-bsd-and-linux
-  sed -i.bak "/^calcite\\.version=.*/c\\calcite.version=$NEXT_VERSION" gradle.properties
-  rm gradle.properties.bak
+  # MacOS uses BSD sed, which works differently from GNU sed on Linux.
+  if [[ "$(uname -s)" == "Darwin" ]]
+  then
+    # https://stackoverflow.com/questions/5694228/sed-in-place-flag-that-works-both-on-mac-bsd-and-linux
+    # https://stackoverflow.com/questions/64373364/how-to-fix-sed-command-on-macos-with-error-extra-characters-after-at-the-end-o
+    sed -i.bak "/^calcite\\.version=.*/c\\ 
+calcite.version=$NEXT_VERSION
+" gradle.properties && rm gradle.properties.bak
+  else
+    sed -i "/^calcite\\.version=.*/c\\calcite.version=$NEXT_VERSION" gradle.properties
+  fi
 
-  echo -e "\nBuilding '$NEXT_VERSION'..." >&2
-  ./gradlew build -x :redis:test && (
+  # $(return $?) has the same status code as the previous `sed` command.
+  $(return $?) && (
 
-    echo -e "\nTests passed! Setting local looker branch." >&2
-    git branch -f looker
+    echo -e "\nBuilding '$NEXT_VERSION'..." >&2
+    ./gradlew build -x :redis:test && (
 
-    export COMMIT_MSG="Prepare for $NEXT_TAG release"
-    echo -e "\nTests passed! Creating commit '$COMMIT_MSG'." >&2
-    git add gradle.properties && git commit -m "$COMMIT_MSG" && (
+      echo -e "\nTests passed! Setting local looker branch." >&2
+      git branch -f looker
 
-      echo -e "\nCreating new tag '$NEXT_TAG'." >&2
-      git tag -f "$NEXT_TAG"
+      export COMMIT_MSG="Prepare for $NEXT_TAG release"
+      echo -e "\nCreating commit '$COMMIT_MSG'." >&2
+      git add gradle.properties && git commit -m "$COMMIT_MSG" && (
 
-      echo -e "\nTake a look around.\nIf everything looks good, you can publish to Nexus with this command:\n" >&2
-      echo -e "    ./gradlew -Prelease -PskipSign publishAllPublicationsToLookerNexusRepository\n" >&2
-      echo -e "And you can push the release tag and force-push the looker branch to looker-open-source with these commands:\n" >&2
-      echo -e "    git push git@github.com:looker-open-source/calcite.git $NEXT_TAG"
-      echo -e "    git push -f git@github.com:looker-open-source/calcite.git looker"
+        echo -e "\nCreating new tag '$NEXT_TAG'." >&2
+        git tag -f "$NEXT_TAG"
+
+        echo -e "\nTake a look around.\nIf everything looks good, you can publish to Nexus with this command:\n" >&2
+        echo -e "    ./gradlew -Prelease -PskipSign publishAllPublicationsToLookerNexusRepository\n" >&2
+        echo -e "And you can push the release tag and force-push the looker branch to looker-open-source with these commands:\n" >&2
+        echo -e "    git push git@github.com:looker-open-source/calcite.git $NEXT_TAG"
+        echo -e "    git push -f git@github.com:looker-open-source/calcite.git looker"
+      )
     )
   )
 )
